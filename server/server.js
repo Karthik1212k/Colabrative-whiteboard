@@ -10,6 +10,15 @@ const Stroke = require("./strokeModel");
 const app = express();
 app.use(cors());
 
+// Health Check Route
+app.get("/", (req, res) => {
+  res.send({
+    status: "Server is Live",
+    dbConnection: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+    socketClients: io.engine.clientsCount
+  });
+});
+
 const server = http.createServer(app);
 
 const io = socketIo(server, {
