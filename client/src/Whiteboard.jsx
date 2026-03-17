@@ -32,6 +32,9 @@ export default function Whiteboard() {
   const [showUserList, setShowUserList] = useState(false);
   const [showProperties, setShowProperties] = useState(false);
 
+  const fileInputRef = useRef(null);
+  const imgCache = useRef({}); // Cache for loaded HTMLImageElements to avoid flickering
+
   // Refs for canvas events so they always access the latest state without re-binding
   const toolRef = useRef(currentTool);
   const colorRef = useRef(currentColor);
@@ -82,9 +85,32 @@ export default function Whiteboard() {
     window.addEventListener("resize", resizeCanvas);
 
     // Dynamic Draw function that handles all shapes and tools
-    const drawShape = (type, x0, y0, x1, y1, color, bgColor, size, isEraseStroke, fillStyle = 'hachure', strokeStyle = 'solid', sloppiness = 1.8, opacity = 100) => {
-      ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
+    const drawShape = (type, x0, y0, x1, y1, color, bgColor, size, isEraseStroke, fillStyle = 'hachure', strokeStyle = 'solid', sloppiness = 1.8, opacity = 100, imageData = null) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
       
+      ctx.globalAlpha = opacity / 100;
+      
+      if (type === 'image' && imageData) {
+        if (imgCache.current[imageData]) {
+          const img = imgCache.current[imageData];
+          // Maintain aspect ratio while fitting into the box (x0,y0) to (x1,y1)
+          ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+        } else {
+          const img = new Image();
+          img.src = imageData;
+          img.onload = () => {
+            imgCache.current[imageData] = img;
+            // Redraw the image after it loads. This might cause a flicker if not handled carefully
+            // For now, we just draw it once it's loaded.
+            ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+          };
+        }
+        ctx.globalAlpha = 1; // Always restore for future layers
+        return;
+      }
+
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.lineWidth = size;
@@ -286,7 +312,8 @@ export default function Whiteboard() {
           s.bgColor || 'transparent',
           s.size,
           isErase,
-          s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity
+          s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
+          s.imageData // Pass imageData
         );
       });
     });
@@ -303,7 +330,8 @@ export default function Whiteboard() {
         data.bgColor || 'transparent',
         data.size,
         isErase,
-        data.fillStyle, data.strokeStyle, data.sloppiness, data.opacity
+        data.fillStyle, data.strokeStyle, data.sloppiness, data.opacity,
+        data.imageData // Pass imageData
       );
     });
 
@@ -402,6 +430,59 @@ export default function Whiteboard() {
     link.download = "whiteboard.png";
     link.href = canvas.toDataURL();
     link.click();
+  };
+
+  const handleImageClick = () => {
+    fileInputRef.current.click();
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64Data = event.target.result;
+      const img = new Image();
+      img.src = base64Data;
+      img.onload = () => {
+        // Automatically place it in center or follow mouse later. 
+        // For simplicity, place it at center with natural size
+        const canvas = canvasRef.current;
+        const x0 = (canvas.width / 2) - (img.width / 4);
+        const y0 = (canvas.height / 2) - (img.height / 4);
+        const x1 = x0 + (img.width / 2);
+        const y1 = y0 + (img.height / 2);
+        
+        // Cache it
+        imgCache.current[base64Data] = img;
+        
+        // Draw locally
+        drawShape('image', x0, y0, x1, y1, null, null, null, false, null, null, null, currentOpacity, base64Data);
+
+        // Emit to server
+        socket.emit("draw", {
+          type: 'image',
+          x0, y0, x1, y1,
+          points: [
+            { x: x0 / canvas.width, y: y0 / canvas.height },
+            { x: x1 / canvas.width, y: y1 / canvas.height }
+          ],
+          color: null,
+          bgColor: null,
+          size: null,
+          isEraseStroke: false,
+          fillStyle: null,
+          strokeStyle: null,
+          sloppiness: null,
+          opacity: currentOpacity,
+          imageData: base64Data
+        });
+      };
+    };
+    reader.readAsDataURL(file);
+    // Reset tool back to select or pen after upload
+    setCurrentTool('pen');
   };
 
   const handleRegister = (e) => {
@@ -507,9 +588,16 @@ export default function Whiteboard() {
            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
         </button>
 
-        <button className={`action-btn ${currentTool === 'image' ? 'active' : ''}`} onClick={() => setCurrentTool('image')} title="Insert image">
+        <button className={`action-btn ${currentTool === 'image' ? 'active' : ''}`} onClick={handleImageClick} title="Insert image">
            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
         </button>
+        <input 
+          type="file" 
+          ref={fileInputRef} 
+          style={{ display: 'none' }} 
+          accept="image/*"
+          onChange={handleFileChange}
+        />
 
         <button className={`action-btn ${currentTool === 'eraser' ? 'active' : ''}`} onClick={() => setCurrentTool('eraser')} title="Eraser">
            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>

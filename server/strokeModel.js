@@ -13,7 +13,9 @@ const strokeSchema = new mongoose.Schema({
   fillStyle: String,
   strokeStyle: String,
   sloppiness: Number,
-  opacity: Number
+  opacity: Number,
+  imageData: String,
+  createdAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model("Stroke", strokeSchema);
