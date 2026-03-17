@@ -515,20 +515,38 @@ export default function Whiteboard() {
       </div>
 
       {/* Top Right Live Users Widget */}
-      {liveUsers.length > 1 && (
-        <div className="top-right-actions">
-          <div className="avatars">
-            {liveUsers.slice(0, 4).map((u) => (
-              <div key={u.id} className="avatar" style={{ backgroundColor: u.color, color: 'white', border: '2px solid white' }} title={u.name}>
-                {u.initials}
-              </div>
-            ))}
-            {liveUsers.length > 4 && (
-              <div className="avatar">+{liveUsers.length - 4}</div>
-            )}
+      <div className="top-right-actions">
+        {liveUsers.length > 0 && (
+          <div className="live-status-badge">
+            <div className="live-dot"></div>
+            <span>{liveUsers.length} {liveUsers.length === 1 ? 'User' : 'Users'} Live</span>
           </div>
+        )}
+        
+        <div className="avatars">
+          {liveUsers.slice(0, 5).map((u) => (
+            <div 
+              key={u.id} 
+              className={`avatar ${u.id === socket.id ? 'current-user' : ''}`} 
+              style={{ backgroundColor: u.color }}
+              title={`${u.name}${u.id === socket.id ? ' (You)' : ''}`}
+            >
+              {u.initials}
+            </div>
+          ))}
+          {liveUsers.length > 5 && (
+            <div className="avatar more">+{liveUsers.length - 5}</div>
+          )}
         </div>
-      )}
+
+        <button className="share-btn" onClick={() => {
+          navigator.clipboard.writeText(window.location.href);
+          alert("Room link copied to clipboard!");
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+          Share
+        </button>
+      </div>
 
       {/* Custom Data Actions (Bottom Right) */}
       <div className="bottom-right-actions flex-col">
