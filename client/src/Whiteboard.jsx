@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import rough from "roughjs";
 
-const socket = io("http://localhost:5000");
+const socket = io("https://colabrative-whiteboard.onrender.com");
 
 const COLORS = ["#1e1e1e", "#e03131", "#2f9e44", "#1971c2", "#f08c00", "#a5d8ff"];
 const SIZES = [2, 4, 8];
