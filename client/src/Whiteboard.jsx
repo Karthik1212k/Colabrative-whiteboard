@@ -11,8 +11,8 @@ const BG_COLOR = "#f8f9fa";
 export default function Whiteboard() {
   const canvasRef = useRef(null);
   const snapshotRef = useRef(null);
-  const startPosRef = useRef({x: 0, y: 0});
-  
+  const startPosRef = useRef({ x: 0, y: 0 });
+
   // React State for UI
   const [currentTool, setCurrentTool] = useState('pen');
   const [currentColor, setCurrentColor] = useState(COLORS[0]);
@@ -62,25 +62,25 @@ export default function Whiteboard() {
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    
+
     // Resize observer to keep canvas sharp
     const resizeCanvas = () => {
       const parent = canvas.parentElement;
       // Save content before resize
       const imgData = canvas.width > 0 ? ctx.getImageData(0, 0, canvas.width, canvas.height) : null;
-      
+
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-      
+
       // Fill background
       ctx.fillStyle = BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+
       if (imgData) {
         ctx.putImageData(imgData, 0, 0);
       }
     };
-    
+
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
@@ -91,35 +91,34 @@ export default function Whiteboard() {
       const ctx = canvas.getContext("2d");
       
       ctx.globalAlpha = opacity / 100;
-      
+
       if (type === 'image' && imageData) {
         if (imgCache.current[imageData]) {
           const img = imgCache.current[imageData];
-          // Maintain aspect ratio while fitting into the box (x0,y0) to (x1,y1)
           ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
         } else {
           const img = new Image();
           img.src = imageData;
           img.onload = () => {
             imgCache.current[imageData] = img;
-            // Redraw the image after it loads. This might cause a flicker if not handled carefully
-            // For now, we just draw it once it's loaded.
             ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
           };
         }
-        ctx.globalAlpha = 1; // Always restore for future layers
+        ctx.globalAlpha = 1;
         return;
       }
+      
+      ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
 
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.lineWidth = size;
       ctx.strokeStyle = isEraseStroke ? BG_COLOR : color;
-      
+
       // Remove neon shadow for the crisp Excalidraw look
       ctx.shadowBlur = 0;
       ctx.shadowColor = "transparent";
-      
+
       if (type === 'pen' || type === 'eraser' || !type) {
         if (!isEraseStroke && strokeStyle === 'dashed') ctx.setLineDash([8, 8]);
         else if (!isEraseStroke && strokeStyle === 'dotted') ctx.setLineDash([2, 4]);
@@ -239,7 +238,7 @@ export default function Whiteboard() {
     const draw = (e) => {
       if (!drawing) return;
       e.preventDefault();
-      
+
       const pos = getMousePos(e);
       const tool = toolRef.current;
       const color = colorRef.current;
@@ -254,7 +253,7 @@ export default function Whiteboard() {
         return; // Work in progress tools
       } else if (tool === 'pen' || tool === 'eraser') {
         drawShape(tool, x, y, pos.x, pos.y, color, bgColor, size, tool === 'eraser', fillStyle, strokeStyle, sloppiness, opacity);
-        
+
         // Continuous emit for pens and eraser
         socket.emit("draw", {
           type: tool,
@@ -304,9 +303,9 @@ export default function Whiteboard() {
         const isErase = s.type === 'eraser' || s.isEraser;
         drawShape(
           s.type || 'pen',
-          s.x0 * canvas.width, 
-          s.y0 * canvas.height, 
-          s.x1 * canvas.width, 
+          s.x0 * canvas.width,
+          s.y0 * canvas.height,
+          s.x1 * canvas.width,
           s.y1 * canvas.height,
           s.color,
           s.bgColor || 'transparent',
@@ -322,9 +321,9 @@ export default function Whiteboard() {
       const isErase = data.type === 'eraser' || data.isEraser;
       drawShape(
         data.type || 'pen',
-        data.x0 * canvas.width, 
-        data.y0 * canvas.height, 
-        data.x1 * canvas.width, 
+        data.x0 * canvas.width,
+        data.y0 * canvas.height,
+        data.x1 * canvas.width,
         data.y1 * canvas.height,
         data.color,
         data.bgColor || 'transparent',
@@ -343,21 +342,22 @@ export default function Whiteboard() {
       function replay() {
         if (i >= strokes.length) return;
         const s = strokes[i];
-        
+
         const isErase = s.type === 'eraser' || s.isEraser;
         drawShape(
           s.type || 'pen',
-          s.x0 * canvas.width, 
-          s.y0 * canvas.height, 
-          s.x1 * canvas.width, 
+          s.x0 * canvas.width,
+          s.y0 * canvas.height,
+          s.x1 * canvas.width,
           s.y1 * canvas.height,
           s.color,
           s.bgColor || 'transparent',
           s.size,
           isErase,
-          s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity
+          s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
+          s.imageData // Pass imageData
         );
-        
+
         i++;
         setTimeout(replay, 10);
       }
@@ -403,7 +403,7 @@ export default function Whiteboard() {
       window.removeEventListener("touchend", stopDrawing);
       canvas.removeEventListener("touchmove", draw);
       canvas.removeEventListener("mousemove", trackCursor);
-      
+
       socket.off("draw");
       socket.off("initData");
       socket.off("replayData");
@@ -415,7 +415,7 @@ export default function Whiteboard() {
   }, []);
 
   const replay = () => { socket.emit("getReplay"); };
-  
+
   const clearBoard = () => {
     socket.emit("clearBoard");
     const canvas = canvasRef.current;
@@ -446,42 +446,25 @@ export default function Whiteboard() {
       const img = new Image();
       img.src = base64Data;
       img.onload = () => {
-        // Automatically place it in center or follow mouse later. 
-        // For simplicity, place it at center with natural size
         const canvas = canvasRef.current;
         const x0 = (canvas.width / 2) - (img.width / 4);
         const y0 = (canvas.height / 2) - (img.height / 4);
         const x1 = x0 + (img.width / 2);
         const y1 = y0 + (img.height / 2);
         
-        // Cache it
         imgCache.current[base64Data] = img;
-        
-        // Draw locally
         drawShape('image', x0, y0, x1, y1, null, null, null, false, null, null, null, currentOpacity, base64Data);
 
-        // Emit to server
         socket.emit("draw", {
           type: 'image',
           x0, y0, x1, y1,
-          points: [
-            { x: x0 / canvas.width, y: y0 / canvas.height },
-            { x: x1 / canvas.width, y: y1 / canvas.height }
-          ],
-          color: null,
-          bgColor: null,
-          size: null,
-          isEraseStroke: false,
-          fillStyle: null,
-          strokeStyle: null,
-          sloppiness: null,
-          opacity: currentOpacity,
-          imageData: base64Data
+          points: [{ x: x0 / canvas.width, y: y0 / canvas.height }, { x: x1 / canvas.width, y: y1 / canvas.height }],
+          color: null, bgColor: null, size: null, isEraseStroke: false, fillStyle: null, strokeStyle: null, sloppiness: null,
+          opacity: currentOpacity, imageData: base64Data
         });
       };
     };
     reader.readAsDataURL(file);
-    // Reset tool back to select or pen after upload
     setCurrentTool('pen');
   };
 
@@ -503,10 +486,10 @@ export default function Whiteboard() {
             <h2 className="modal-title">Welcome to Whiteboard</h2>
             <p className="modal-subtitle">Enter your name to start collaborating</p>
             <form onSubmit={handleRegister}>
-              <input 
-                type="text" 
-                className="modal-input" 
-                placeholder="Your Name (e.g. John Doe)" 
+              <input
+                type="text"
+                className="modal-input"
+                placeholder="Your Name (e.g. John Doe)"
                 value={tempName}
                 onChange={(e) => setTempName(e.target.value)}
                 autoFocus
@@ -522,11 +505,11 @@ export default function Whiteboard() {
 
       <div className="whiteboard-wrapper">
         <canvas ref={canvasRef}></canvas>
-        
+
         {/* Render Live Multiplayer Cursors */}
         {Object.values(cursors).map(cursor => (
-          <div 
-            key={cursor.id} 
+          <div
+            key={cursor.id}
             className="cursor-wrapper"
             style={{
               transform: `translate(${cursor.x * window.innerWidth}px, ${cursor.y * window.innerHeight}px)`
@@ -557,50 +540,44 @@ export default function Whiteboard() {
         <div className="tool-divider"></div>
 
         <button className={`action-btn ${currentTool === 'select' ? 'active' : ''}`} onClick={() => setCurrentTool('select')} title="Selection">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"></path><path d="M13 13l6 6"></path></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"></path><path d="M13 13l6 6"></path></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'rect' ? 'active' : ''}`} onClick={() => setCurrentTool('rect')} title="Rectangle">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'diamond' ? 'active' : ''}`} onClick={() => setCurrentTool('diamond')} title="Diamond">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 22 12 12 22 2 12"></polygon></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 22 12 12 22 2 12"></polygon></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'circle' ? 'active' : ''}`} onClick={() => setCurrentTool('circle')} title="Ellipse">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'arrow' ? 'active' : ''}`} onClick={() => setCurrentTool('arrow')} title="Arrow">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'line' ? 'active' : ''}`} onClick={() => setCurrentTool('line')} title="Line">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="19" x2="19" y2="5" /></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="19" x2="19" y2="5" /></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'pen' ? 'active' : ''}`} onClick={() => setCurrentTool('pen')} title="Pen">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
         </button>
-        
+
         <button className={`action-btn ${currentTool === 'text' ? 'active' : ''}`} onClick={() => setCurrentTool('text')} title="Text">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
         </button>
 
         <button className={`action-btn ${currentTool === 'image' ? 'active' : ''}`} onClick={handleImageClick} title="Insert image">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
         </button>
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          style={{ display: 'none' }} 
-          accept="image/*"
-          onChange={handleFileChange}
-        />
+        <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileChange} />
 
         <button className={`action-btn ${currentTool === 'eraser' ? 'active' : ''}`} onClick={() => setCurrentTool('eraser')} title="Eraser">
-           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
         </button>
       </div>
 
@@ -608,20 +585,20 @@ export default function Whiteboard() {
       <div className="top-right-actions">
         {liveUsers.length > 0 && (
           <div className="live-status-wrapper">
-            <div 
-              className={`live-status-badge ${showUserList ? 'active' : ''}`} 
+            <div
+              className={`live-status-badge ${showUserList ? 'active' : ''}`}
               onClick={() => setShowUserList(!showUserList)}
               title="Click to see active users"
             >
               <div className="live-dot"></div>
               <span>{liveUsers.length} {liveUsers.length === 1 ? 'User' : 'Users'} Live</span>
-              <svg 
-                width="12" 
-                height="12" 
-                viewBox="0 0 24 24" 
-                fill="none" 
-                stroke="currentColor" 
-                strokeWidth="3" 
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
                 style={{ marginLeft: '4px', transform: showUserList ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
               >
                 <path d="M6 9l6 6 6-6" />
@@ -647,12 +624,12 @@ export default function Whiteboard() {
             )}
           </div>
         )}
-        
+
         <div className="avatars">
           {liveUsers.slice(0, 5).map((u) => (
-            <div 
-              key={u.id} 
-              className={`avatar ${u.id === socket.id ? 'current-user' : ''}`} 
+            <div
+              key={u.id}
+              className={`avatar ${u.id === socket.id ? 'current-user' : ''}`}
               style={{ backgroundColor: u.color }}
               title={`${u.name}${u.id === socket.id ? ' (You)' : ''}`}
             >
@@ -675,20 +652,20 @@ export default function Whiteboard() {
 
       {/* Custom Data Actions (Bottom Right) */}
       <div className="bottom-right-actions flex-col">
-           <button className="icon-btn-square" onClick={saveImage} title="Save to PNG">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
-           </button>
-            <button className="icon-btn-square" onClick={replay} title="Replay">
-             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-               <polyline points="1 4 1 10 7 10"></polyline>
-               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
-             </svg>
-            </button>
+        <button className="icon-btn-square" onClick={saveImage} title="Save to PNG">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+        </button>
+        <button className="icon-btn-square" onClick={replay} title="Replay">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10"></polyline>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+          </svg>
+        </button>
 
         <div className="tool-divider mobile-hide"></div>
-        
+
         {/* Properties Toggle for Mobile */}
-        <button 
+        <button
           className={`action-btn mobile-only ${showProperties ? 'active' : ''}`}
           onClick={() => setShowProperties(!showProperties)}
           title="Toggle Properties"
@@ -698,9 +675,9 @@ export default function Whiteboard() {
             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
           </svg>
         </button>
-           <button className="icon-btn-square" onClick={clearBoard} title="Clear Board" style={{color: '#fa5252'}}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-           </button>
+        <button className="icon-btn-square" onClick={clearBoard} title="Clear Board" style={{ color: '#fa5252' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+        </button>
       </div>
 
       {/* Bottom Left Zoom / History Actions */}
@@ -717,115 +694,116 @@ export default function Whiteboard() {
         </button>
       </div>
 
-      { /* Left Side Properties Panel - Designed exactly to match the image */ }
+      { /* Left Side Properties Panel - Designed exactly to match the image */}
       {/* Left Properties Panel */}
       {(showProperties || window.innerWidth > 768) && (
         <div className={`properties-panel ${showProperties ? 'show-mobile' : ''}`}>
           <div className="prop-section">
             <span className="panel-title">Stroke color</span>
             <div className="hex-display">
-              <div className="color-swatch" style={{backgroundColor: currentColor}}></div>
+              <div className="color-swatch" style={{ backgroundColor: currentColor }}></div>
               <span>{currentColor}</span>
             </div>
             <div className="color-grid">
               {COLORS.map(c => (
-                 <button 
-                   key={c}
-                   className={`color-btn ${currentColor === c ? 'active' : ''}`}
-                   style={{ backgroundColor: c }}
-                   onClick={() => setCurrentColor(c)}
-                 />
+                <button
+                  key={c}
+                  className={`color-btn ${currentColor === c ? 'active' : ''}`}
+                  style={{ backgroundColor: c }}
+                  onClick={() => setCurrentColor(c)}
+                />
               ))}
             </div>
           </div>
 
-        { /* Show Fill properties only for shapes that can be filled */ }
-        {(currentTool === 'rect' || currentTool === 'circle' || currentTool === 'diamond') && (
+          { /* Show Fill properties only for shapes that can be filled */}
+          {(currentTool === 'rect' || currentTool === 'circle' || currentTool === 'diamond') && (
+            <div className="prop-section">
+              <div className="panel-title">Background</div>
+              <div className="hex-display">
+                <div className="color-swatch empty" style={currentBackground !== 'transparent' ? { backgroundColor: currentBackground } : {}}></div>
+                <span>{currentBackground === 'transparent' ? 'transparent' : currentBackground}</span>
+              </div>
+              <div className="color-grid">
+                <button
+                  className={`color-btn custom-transparent ${currentBackground === 'transparent' ? 'active' : ''}`}
+                  onClick={() => setCurrentBackground('transparent')}
+                  title="Transparent"
+                >
+                  <div className="strike"></div>
+                </button>
+                {COLORS.filter((_, i) => i > 0).map(c => (
+                  <button
+                    key={c}
+                    className={`color-btn ${currentBackground === c ? 'active' : ''}`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => setCurrentBackground(c)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          { /* Mock controls to match the exact aesthetic */}
           <div className="prop-section">
-            <div className="panel-title">Background</div>
-            <div className="hex-display">
-              <div className="color-swatch empty" style={currentBackground !== 'transparent' ? {backgroundColor: currentBackground} : {}}></div>
-              <span>{currentBackground === 'transparent' ? 'transparent' : currentBackground}</span>
+            <div className="panel-title">Fill</div>
+            <div className="button-group">
+              <button className={`icon-btn-radio ${currentFillStyle === 'hachure' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('hachure')}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 3l18 18M3 9l18 18M3 15l18 18M9 3l18 18M15 3l18 18" /></svg></button>
+              <button className={`icon-btn-radio ${currentFillStyle === 'cross-hatch' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('cross-hatch')}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="12" cy="12" r="3" fill="currentColor" /></svg></button>
+              <button className={`icon-btn-radio ${currentFillStyle === 'solid' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('solid')}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg></button>
             </div>
-            <div className="color-grid">
-              <button 
-                 className={`color-btn custom-transparent ${currentBackground === 'transparent' ? 'active' : ''}`}
-                 onClick={() => setCurrentBackground('transparent')}
-                 title="Transparent"
-              >
-                <div className="strike"></div>
-              </button>
-              {COLORS.filter((_, i) => i > 0).map(c => (
-                 <button 
-                   key={c}
-                   className={`color-btn ${currentBackground === c ? 'active' : ''}`}
-                   style={{ backgroundColor: c }}
-                   onClick={() => setCurrentBackground(c)}
-                 />
+          </div>
+
+          <div className="prop-section">
+            <div className="panel-title">Stroke width</div>
+            <div className="button-group">
+              {SIZES.map((s, idx) => (
+                <button
+                  key={s}
+                  className={`icon-btn-radio ${currentSize === s ? 'active' : ''}`}
+                  onClick={() => setCurrentSize(s)}
+                >
+                  <div style={{ width: '12px', height: `${1 + idx * 2}px`, background: 'currentColor', borderRadius: '1px' }}></div>
+                </button>
               ))}
             </div>
           </div>
-        )}
 
-        { /* Mock controls to match the exact aesthetic */ }
-        <div className="prop-section">
-           <div className="panel-title">Fill</div>
-           <div className="button-group">
-              <button className={`icon-btn-radio ${currentFillStyle === 'hachure' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('hachure')}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 3l18 18M3 9l18 18M3 15l18 18M9 3l18 18M15 3l18 18"/></svg></button>
-              <button className={`icon-btn-radio ${currentFillStyle === 'cross-hatch' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('cross-hatch')}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
-              <button className={`icon-btn-radio ${currentFillStyle === 'solid' ? 'active' : ''}`} onClick={() => setCurrentFillStyle('solid')}><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg></button>
-           </div>
-        </div>
-
-        <div className="prop-section">
-          <div className="panel-title">Stroke width</div>
-          <div className="button-group">
-             {SIZES.map((s, idx) => (
-               <button 
-                 key={s}
-                 className={`icon-btn-radio ${currentSize === s ? 'active' : ''}`}
-                 onClick={() => setCurrentSize(s)}
-               >
-                  <div style={{ width: '12px', height: `${1 + idx*2}px`, background: 'currentColor', borderRadius: '1px'}}></div>
-               </button>
-             ))}
+          <div className="prop-section">
+            <div className="panel-title">Stroke style</div>
+            <div className="button-group">
+              <button className={`icon-btn-radio ${currentStrokeStyle === 'solid' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('solid')}><div style={{ width: '12px', height: '2px', background: 'currentColor' }} /></button>
+              <button className={`icon-btn-radio ${currentStrokeStyle === 'dashed' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('dashed')}><div style={{ width: '12px', height: '2px', borderTop: '2px dashed currentColor' }} /></button>
+              <button className={`icon-btn-radio ${currentStrokeStyle === 'dotted' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('dotted')}><div style={{ width: '12px', height: '2px', borderTop: '2px dotted currentColor' }} /></button>
+            </div>
           </div>
-        </div>
 
-        <div className="prop-section">
-           <div className="panel-title">Stroke style</div>
-           <div className="button-group">
-              <button className={`icon-btn-radio ${currentStrokeStyle === 'solid' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('solid')}><div style={{width:'12px', height:'2px', background:'currentColor'}}/></button>
-              <button className={`icon-btn-radio ${currentStrokeStyle === 'dashed' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('dashed')}><div style={{width:'12px', height:'2px', borderTop:'2px dashed currentColor'}}/></button>
-              <button className={`icon-btn-radio ${currentStrokeStyle === 'dotted' ? 'active' : ''}`} onClick={() => setCurrentStrokeStyle('dotted')}><div style={{width:'12px', height:'2px', borderTop:'2px dotted currentColor'}}/></button>
-           </div>
-        </div>
+          <div className="prop-section">
+            <div className="panel-title">Sloppiness</div>
+            <div className="button-group">
+              <button className={`icon-btn-radio ${currentSloppiness === 0 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(0)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18" /></svg></button>
+              <button className={`icon-btn-radio ${currentSloppiness === 1.8 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(1.8)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 14c4-4 6-4 10 0s6 4 10 0" /></svg></button>
+              <button className={`icon-btn-radio ${currentSloppiness === 3 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(3)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 16c2-8 3-8 6 0 2 6 3 6 6 0 2-4 3-4 6 0" /></svg></button>
+            </div>
+          </div>
 
-        <div className="prop-section">
-           <div className="panel-title">Sloppiness</div>
-           <div className="button-group">
-              <button className={`icon-btn-radio ${currentSloppiness === 0 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(0)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18"/></svg></button>
-              <button className={`icon-btn-radio ${currentSloppiness === 1.8 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(1.8)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 14c4-4 6-4 10 0s6 4 10 0"/></svg></button>
-              <button className={`icon-btn-radio ${currentSloppiness === 3 ? 'active' : ''}`} onClick={() => setCurrentSloppiness(3)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 16c2-8 3-8 6 0 2 6 3 6 6 0 2-4 3-4 6 0"/></svg></button>
-           </div>
-        </div>
+          <div className="prop-section">
+            <div className="panel-title">Edges</div>
+            <div className="button-group" style={{ width: '66%' }}>
+              <button className="icon-btn-radio active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="4" width="16" height="16" /></svg></button>
+              <button className="icon-btn-radio"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="4" width="16" height="16" rx="4" /></svg></button>
+            </div>
+          </div>
 
-        <div className="prop-section">
-           <div className="panel-title">Edges</div>
-           <div className="button-group" style={{width: '66%'}}>
-              <button className="icon-btn-radio active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="4" width="16" height="16"/></svg></button>
-              <button className="icon-btn-radio"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="4" width="16" height="16" rx="4"/></svg></button>
-           </div>
-        </div>
+          <div className="prop-section">
+            <div className="panel-title">Opacity</div>
+            <input type="range" min="10" max="100" value={currentOpacity} onChange={(e) => setCurrentOpacity(Number(e.target.value))} className="opacity-slider" />
+          </div>
 
-        <div className="prop-section">
-           <div className="panel-title">Opacity</div>
-           <input type="range" min="10" max="100" value={currentOpacity} onChange={(e) => setCurrentOpacity(Number(e.target.value))} className="opacity-slider" />
-        </div>
-
-        <div className="prop-section border-top">
-           <div className="panel-title">Layers</div>
-           <div className="button-group">
+          <div className="prop-section border-top">
+            <div className="panel-title">Layers</div>
+            <div className="button-group">
+              <button className="text-btn">Send backward</button>
             </div>
           </div>
         </div>
