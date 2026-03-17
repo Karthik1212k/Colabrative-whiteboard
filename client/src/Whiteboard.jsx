@@ -29,6 +29,7 @@ export default function Whiteboard() {
   const [userName, setUserName] = useState(localStorage.getItem("whiteboard-user") || "");
   const [showRegModal, setShowRegModal] = useState(!localStorage.getItem("whiteboard-user"));
   const [tempName, setTempName] = useState("");
+  const [showUserList, setShowUserList] = useState(false);
 
   // Refs for canvas events so they always access the latest state without re-binding
   const toolRef = useRef(currentTool);
@@ -517,9 +518,44 @@ export default function Whiteboard() {
       {/* Top Right Live Users Widget */}
       <div className="top-right-actions">
         {liveUsers.length > 0 && (
-          <div className="live-status-badge">
-            <div className="live-dot"></div>
-            <span>{liveUsers.length} {liveUsers.length === 1 ? 'User' : 'Users'} Live</span>
+          <div className="live-status-wrapper">
+            <div 
+              className={`live-status-badge ${showUserList ? 'active' : ''}`} 
+              onClick={() => setShowUserList(!showUserList)}
+              title="Click to see active users"
+            >
+              <div className="live-dot"></div>
+              <span>{liveUsers.length} {liveUsers.length === 1 ? 'User' : 'Users'} Live</span>
+              <svg 
+                width="12" 
+                height="12" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="3" 
+                style={{ marginLeft: '4px', transform: showUserList ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </div>
+
+            {showUserList && (
+              <div className="user-list-dropdown">
+                <div className="dropdown-header">Active Users</div>
+                <div className="dropdown-content">
+                  {liveUsers.map((u) => (
+                    <div key={u.id} className="user-list-item">
+                      <div className="avatar-small" style={{ backgroundColor: u.color }}>
+                        {u.initials}
+                      </div>
+                      <span className="user-list-name">
+                        {u.name} {u.id === socket.id ? '(You)' : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         
