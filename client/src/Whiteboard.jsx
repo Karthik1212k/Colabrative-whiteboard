@@ -31,9 +31,13 @@ export default function Whiteboard() {
   const [tempName, setTempName] = useState("");
   const [showUserList, setShowUserList] = useState(false);
   const [showProperties, setShowProperties] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [gridVisible, setGridVisible] = useState(true);
+  const [history, setHistory] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
 
   const fileInputRef = useRef(null);
-  const imgCache = useRef({}); // Cache for loaded HTMLImageElements to avoid flickering
+  const imgCache = useRef({});
 
   // Refs for canvas events so they always access the latest state without re-binding
   const toolRef = useRef(currentTool);
@@ -90,8 +94,6 @@ export default function Whiteboard() {
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       
-      ctx.globalAlpha = opacity / 100;
-
       if (type === 'image' && imageData) {
         if (imgCache.current[imageData]) {
           const img = imgCache.current[imageData];
@@ -104,16 +106,14 @@ export default function Whiteboard() {
             ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
           };
         }
-        ctx.globalAlpha = 1;
         return;
       }
-      
-      ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
 
+      ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.lineWidth = size;
-      ctx.strokeStyle = isEraseStroke ? BG_COLOR : color;
+      ctx.strokeStyle = isEraseStroke ? (darkMode ? "#121212" : BG_COLOR) : color;
 
       // Remove neon shadow for the crisp Excalidraw look
       ctx.shadowBlur = 0;
@@ -132,7 +132,7 @@ export default function Whiteboard() {
       } else {
         const rc = rough.canvas(canvas);
         const options = {
-          stroke: isEraseStroke ? BG_COLOR : color,
+          stroke: isEraseStroke ? (darkMode ? "#121212" : BG_COLOR) : color,
           strokeWidth: size,
           fill: bgColor !== 'transparent' && !isEraseStroke ? bgColor : undefined,
           fillStyle: fillStyle,
@@ -140,20 +140,14 @@ export default function Whiteboard() {
           roughness: sloppiness,
           bowing: 1.2,
           strokeLineDash: strokeStyle === 'dashed' ? [8, 8] : strokeStyle === 'dotted' ? [2, 4] : undefined,
-          // Generate an arbitrary pseudo-seed based on coordinates to stop the shape 
-          // from jumping around frantically when dragging or re-rendering it over sockets
           seed: Math.abs(Math.floor(x0 + y0 + x1 + y1)) || 1
         };
 
         if (type === 'line') {
           rc.line(x0, y0, x1, y1, options);
         } else if (type === 'rect') {
-          const width = x1 - x0;
-          const height = y1 - y0;
-          rc.rectangle(x0, y0, width, height, options);
+          rc.rectangle(x0, y0, x1 - x0, y1 - y0, options);
         } else if (type === 'circle') {
-          // roughjs circle: centerX, centerY, diameter
-          // If you start dragging from x0,y0, then x0,y0 is the center!
           const distanceX = x1 - x0;
           const distanceY = y1 - y0;
           const diameter = Math.sqrt(distanceX * distanceX + distanceY * distanceY) * 2;
@@ -161,12 +155,7 @@ export default function Whiteboard() {
         } else if (type === 'diamond') {
           const midX = x0 + (x1 - x0) / 2;
           const midY = y0 + (y1 - y0) / 2;
-          rc.polygon([
-            [midX, y0],
-            [x1, midY],
-            [midX, y1],
-            [x0, midY]
-          ], options);
+          rc.polygon([[midX, y0], [x1, midY], [midX, y1], [x0, midY]], options);
         } else if (type === 'arrow') {
           rc.line(x0, y0, x1, y1, options);
           const angle = Math.atan2(y1 - y0, x1 - x0);
@@ -177,7 +166,7 @@ export default function Whiteboard() {
           rc.line(x1, y1, x1 - headLength * Math.cos(a2), y1 - headLength * Math.sin(a2), options);
         }
       }
-      ctx.globalAlpha = 1; // Always restore for future layers
+      ctx.globalAlpha = 1;
     };
 
     const getMousePos = (e) => {
@@ -221,17 +210,20 @@ export default function Whiteboard() {
 
       // Ensure the shape completes on screen release and hits the database
       if (tool !== 'pen' && tool !== 'eraser' && tool !== 'select' && tool !== 'text' && tool !== 'image') {
-        socket.emit("draw", {
+        const x0 = startPosRef.current.x;
+        const y0 = startPosRef.current.y;
+        const x1 = pos.x;
+        const y1 = pos.y;
+        
+        const action = {
           type: tool,
-          x0: startPosRef.current.x / canvas.width,
-          y0: startPosRef.current.y / canvas.height,
-          x1: pos.x / canvas.width,
-          y1: pos.y / canvas.height,
-          color: color,
-          bgColor: bgColor,
-          size: size,
-          fillStyle, strokeStyle, sloppiness, opacity
-        });
+          x0: x0 / canvas.width, y0: y0 / canvas.height, x1: x1 / canvas.width, y1: y1 / canvas.height,
+          color, bgColor, size, isEraser: false, fillStyle, strokeStyle, sloppiness, opacity
+        };
+
+        socket.emit("draw", action);
+        setHistory(prev => [...prev, action]);
+        setRedoStack([]);
       }
     };
 
@@ -297,8 +289,9 @@ export default function Whiteboard() {
 
     // Socket Handlers
     socket.on("initData", (strokes) => {
-      ctx.fillStyle = BG_COLOR;
+      ctx.fillStyle = darkMode ? "#121212" : BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      setHistory(strokes); // Initialize history with server data
       strokes.forEach(s => {
         const isErase = s.type === 'eraser' || s.isEraser;
         drawShape(
@@ -312,7 +305,7 @@ export default function Whiteboard() {
           s.size,
           isErase,
           s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
-          s.imageData // Pass imageData
+          s.imageData
         );
       });
     });
@@ -330,13 +323,19 @@ export default function Whiteboard() {
         data.size,
         isErase,
         data.fillStyle, data.strokeStyle, data.sloppiness, data.opacity,
-        data.imageData // Pass imageData
+        data.imageData
       );
+      // Add to history for undo/redo, but only if it's not an undo/redo action itself
+      // This is a simplified approach; a more robust solution would distinguish between
+      // new actions and replayed actions. For now, we assume all 'draw' events update history.
+      setHistory(prev => [...prev, data]);
+      setRedoStack([]); // Any new draw clears redo stack
     });
 
     socket.on("replayData", (strokes) => {
-      ctx.fillStyle = BG_COLOR;
+      ctx.fillStyle = darkMode ? "#121212" : BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      setHistory(strokes); // Update history with the replayed data
       let i = 0;
 
       function replay() {
@@ -355,7 +354,7 @@ export default function Whiteboard() {
           s.size,
           isErase,
           s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
-          s.imageData // Pass imageData
+          s.imageData
         );
 
         i++;
@@ -365,8 +364,10 @@ export default function Whiteboard() {
     });
 
     socket.on("clearBoard", () => {
-      ctx.fillStyle = BG_COLOR;
+      ctx.fillStyle = darkMode ? "#121212" : BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      setHistory([]);
+      setRedoStack([]);
     });
 
     // Handle Live Cursors
@@ -394,6 +395,8 @@ export default function Whiteboard() {
       socket.emit("updateUser", { name: userName });
     }
 
+    window.addEventListener("keydown", handleKeyDown);
+
     return () => {
       window.removeEventListener("resize", resizeCanvas);
       canvas.removeEventListener("mousedown", startDrawing);
@@ -403,16 +406,57 @@ export default function Whiteboard() {
       window.removeEventListener("touchend", stopDrawing);
       canvas.removeEventListener("touchmove", draw);
       canvas.removeEventListener("mousemove", trackCursor);
-
+      window.removeEventListener("keydown", handleKeyDown);
+      
       socket.off("draw");
       socket.off("initData");
-      socket.off("replayData");
-      socket.off("clearBoard");
       socket.off("usersUpdate");
       socket.off("cursorMove");
       socket.off("userLeft");
+      socket.off("clearBoard");
+      socket.off("replayData"); // Ensure this is also cleaned up
     };
-  }, []);
+  }, [darkMode]); // Re-run effect when darkMode changes to update canvas background
+
+  const handleKeyDown = (e) => {
+    if (e.ctrlKey && e.key === 'z') {
+      e.preventDefault();
+      undo();
+    } else if (e.ctrlKey && e.key === 'y') {
+      e.preventDefault();
+      redo();
+    }
+  };
+
+  const undo = () => {
+    if (history.length === 0) return;
+    const newHistory = [...history];
+    const undone = newHistory.pop();
+    setRedoStack(prev => [...prev, undone]);
+    setHistory(newHistory);
+    socket.emit("undo");
+    setTimeout(redrawOnCanvas, 0);
+  };
+
+  const redo = () => {
+    if (redoStack.length === 0) return;
+    const newRedo = [...redoStack];
+    const redone = newRedo.pop();
+    setRedoStack(newRedo);
+    setHistory(prev => [...prev, redone]);
+    socket.emit("draw", redone);
+    setTimeout(redrawOnCanvas, 0);
+  };
+
+  const redrawOnCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = darkMode ? "#121212" : BG_COLOR;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    socket.emit("getReplay");
+  };
 
   const replay = () => { socket.emit("getReplay"); };
 
@@ -420,14 +464,16 @@ export default function Whiteboard() {
     socket.emit("clearBoard");
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    ctx.fillStyle = BG_COLOR;
+    ctx.fillStyle = darkMode ? "#121212" : BG_COLOR;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    setHistory([]);
+    setRedoStack([]);
   };
 
   const saveImage = () => {
     const canvas = canvasRef.current;
     const link = document.createElement("a");
-    link.download = "whiteboard.png";
+    link.download = "whiteboard-export.png";
     link.href = canvas.toDataURL();
     link.click();
   };
@@ -453,15 +499,16 @@ export default function Whiteboard() {
         const y1 = y0 + (img.height / 2);
         
         imgCache.current[base64Data] = img;
-        drawShape('image', x0, y0, x1, y1, null, null, null, false, null, null, null, currentOpacity, base64Data);
-
-        socket.emit("draw", {
+        const action = {
           type: 'image',
-          x0, y0, x1, y1,
-          points: [{ x: x0 / canvas.width, y: y0 / canvas.height }, { x: x1 / canvas.width, y: y1 / canvas.height }],
-          color: null, bgColor: null, size: null, isEraseStroke: false, fillStyle: null, strokeStyle: null, sloppiness: null,
+          x0: x0 / canvas.width, y0: y0 / canvas.height, x1: x1 / canvas.width, y1: y1 / canvas.height,
+          color: null, bgColor: null, size: null, isEraser: false, fillStyle: null, strokeStyle: null, sloppiness: null,
           opacity: currentOpacity, imageData: base64Data
-        });
+        };
+
+        socket.emit("draw", action);
+        setHistory(prev => [...prev, action]);
+        setRedoStack([]);
       };
     };
     reader.readAsDataURL(file);
@@ -477,8 +524,16 @@ export default function Whiteboard() {
     socket.emit("updateUser", { name: tempName });
   };
 
+  const toggleDarkMode = () => {
+    setDarkMode(prev => !prev);
+  };
+
+  const toggleGrid = () => {
+    setGridVisible(prev => !prev);
+  };
+
   return (
-    <>
+    <div className={`whiteboard-container ${darkMode ? 'dark-mode' : ''}`}>
       {/* Registration Modal */}
       {showRegModal && (
         <div className="modal-overlay">
@@ -503,7 +558,7 @@ export default function Whiteboard() {
         </div>
       )}
 
-      <div className="whiteboard-wrapper">
+      <div className={`whiteboard-wrapper ${gridVisible ? 'grid-visible' : ''}`}>
         <canvas ref={canvasRef}></canvas>
 
         {/* Render Live Multiplayer Cursors */}
@@ -571,10 +626,9 @@ export default function Whiteboard() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
         </button>
 
-        <button className={`action-btn ${currentTool === 'image' ? 'active' : ''}`} onClick={handleImageClick} title="Insert image">
+        <button className={`action-btn ${currentTool === 'image' ? 'active' : ''}`} onClick={() => setCurrentTool('image')} title="Insert image">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
         </button>
-        <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleFileChange} />
 
         <button className={`action-btn ${currentTool === 'eraser' ? 'active' : ''}`} onClick={() => setCurrentTool('eraser')} title="Eraser">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg>
@@ -650,8 +704,29 @@ export default function Whiteboard() {
         </button>
       </div>
 
+      {/* Bottom Left Actions */}
+      <div className="bottom-left-actions">
+        <button className="icon-btn-square" onClick={() => setDarkMode(!darkMode)} title="Toggle Dark Mode">
+          {darkMode ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+          )}
+        </button>
+        <button className={`icon-btn-square ${gridVisible ? 'active' : ''}`} onClick={() => setGridVisible(!gridVisible)} title="Toggle Grid">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+        </button>
+        <div className="tool-divider"></div>
+        <button className="icon-btn-square" onClick={undo} title="Undo (Ctrl+Z)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>
+        </button>
+        <button className="icon-btn-square" onClick={redo} title="Redo (Ctrl+Y)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path></svg>
+        </button>
+      </div>
+
       {/* Custom Data Actions (Bottom Right) */}
-      <div className="bottom-right-actions flex-col">
+      <div className="bottom-right-actions">
         <button className="icon-btn-square" onClick={saveImage} title="Save to PNG">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
         </button>
@@ -663,9 +738,9 @@ export default function Whiteboard() {
         </button>
 
         <div className="tool-divider mobile-hide"></div>
-
+        
         {/* Properties Toggle for Mobile */}
-        <button
+        <button 
           className={`action-btn mobile-only ${showProperties ? 'active' : ''}`}
           onClick={() => setShowProperties(!showProperties)}
           title="Toggle Properties"
@@ -680,18 +755,10 @@ export default function Whiteboard() {
         </button>
       </div>
 
-      {/* Bottom Left Zoom / History Actions */}
-      <div className="bottom-left-actions">
+      <div className="bottom-left-zoom mobile-hide">
         <button className="icon-btn-square">-</button>
-        <span className="zoom-level">63%</span>
+        <span className="zoom-level">100%</span>
         <button className="icon-btn-square">+</button>
-        <div className="tool-divider"></div>
-        <button className="icon-btn-square">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"></path></svg>
-        </button>
-        <button className="icon-btn-square">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"></path></svg>
-        </button>
       </div>
 
       { /* Left Side Properties Panel - Designed exactly to match the image */}
@@ -803,11 +870,10 @@ export default function Whiteboard() {
           <div className="prop-section border-top">
             <div className="panel-title">Layers</div>
             <div className="button-group">
-              <button className="text-btn">Send backward</button>
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

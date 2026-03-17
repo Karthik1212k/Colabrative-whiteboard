@@ -88,6 +88,22 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("undo", async () => {
+    // Remove last stroke from current batch or DB
+    if (strokeBatch.length > 0) {
+      strokeBatch.pop();
+    } else {
+      const lastStroke = await Stroke.findOne().sort({ _id: -1 });
+      if (lastStroke) {
+        await Stroke.deleteOne({ _id: lastStroke._id });
+      }
+    }
+    // Broadcast to everyone to re-request data
+    io.emit("clearBoard"); // Clear locally
+    const strokes = await Stroke.find();
+    io.emit("initData", strokes); // Send updated state
+  });
+
   socket.on("getReplay", async () => {
     // Make sure we save any pending strokes first!
     if (strokeBatch.length > 0) {
