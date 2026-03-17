@@ -52,7 +52,7 @@ io.on("connection", (socket) => {
   const randomName = names[Math.floor(Math.random() * names.length)];
   const initials = randomName.substring(0, 2).toUpperCase();
   const color = avatarColors[users.size % avatarColors.length];
-  
+
   users.set(socket.id, { id: socket.id, name: randomName, initials, color, x: 0, y: 0 });
 
   // Broadcast updated user list to everyone
@@ -75,10 +75,10 @@ io.on("connection", (socket) => {
   socket.on("draw", (data) => {
     // Broadcast to everyone EXCEPT the sender
     socket.broadcast.emit("draw", data);
-    
+
     // Add to batch instead of immediately saving to prevent database freezing
     strokeBatch.push(data);
-    
+
     // Save to DB in batches to handle high-frequency drawing optimally
     if (strokeBatch.length >= 50) {
       if (batchTimeout) clearTimeout(batchTimeout);
@@ -88,29 +88,13 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("undo", async () => {
-    // Remove last stroke from current batch or DB
-    if (strokeBatch.length > 0) {
-      strokeBatch.pop();
-    } else {
-      const lastStroke = await Stroke.findOne().sort({ _id: -1 });
-      if (lastStroke) {
-        await Stroke.deleteOne({ _id: lastStroke._id });
-      }
-    }
-    // Broadcast to everyone to re-request data
-    io.emit("clearBoard"); // Clear locally
-    const strokes = await Stroke.find();
-    io.emit("initData", strokes); // Send updated state
-  });
-
   socket.on("getReplay", async () => {
     // Make sure we save any pending strokes first!
     if (strokeBatch.length > 0) {
       if (batchTimeout) clearTimeout(batchTimeout);
       saveBatch();
     }
-    
+
     // Small delay to ensure DB insertion is complete
     setTimeout(async () => {
       const strokes = await Stroke.find();
@@ -125,10 +109,10 @@ io.on("connection", (socket) => {
       clearTimeout(batchTimeout);
       batchTimeout = null;
     }
-    
+
     // Broadcast clear to all other clients
     socket.broadcast.emit("clearBoard");
-    
+
     // Wipe DB
     await Stroke.deleteMany({});
   });
