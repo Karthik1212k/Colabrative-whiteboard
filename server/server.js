@@ -10,13 +10,6 @@ const Stroke = require("./strokeModel");
 const app = express();
 app.use(cors());
 
-const server = http.createServer(app);
-
-const io = socketIo(server, {
-  cors: { origin: "*" },
-  maxHttpBufferSize: 1e8 // increased buffer size for large base64 image uploads
-});
-
 // Health Check Route
 app.get("/", (req, res) => {
   res.send({
@@ -26,12 +19,20 @@ app.get("/", (req, res) => {
   });
 });
 
+const server = http.createServer(app);
+
+const io = socketIo(server, {
+  cors: { origin: "*" },
+  maxHttpBufferSize: 1e8 // Allow up to 100MB payloads for image uploads
+});
+
 const mongoURI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/whiteboard";
-mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 })
-  .then(() => console.log("Connected to MongoDB (" + mongoURI + ")"))
-  .catch(err => console.error("Database connection error. Strokes will not be saved/restored until DB is connected. Error:", err.message));
+mongoose.connect(mongoURI)
+  .then(() => console.log("Connected to MongoDB Atlas / Local"))
+  .catch(err => console.error("Database connection error:", err));
 
 let strokeBatch = [];
+let redoStack = [];
 let batchTimeout = null;
 
 function saveBatch() {
@@ -84,6 +85,9 @@ io.on("connection", (socket) => {
     // Broadcast to everyone EXCEPT the sender
     socket.broadcast.emit("draw", data);
 
+    // Clear redo stack on new action
+    redoStack = [];
+
     // Add to batch instead of immediately saving to prevent database freezing
     strokeBatch.push(data);
 
@@ -105,22 +109,15 @@ io.on("connection", (socket) => {
 
     // Small delay to ensure DB insertion is complete
     setTimeout(async () => {
-      if (mongoose.connection.readyState === 1) {
-        try {
-          const strokes = await Stroke.find();
-          socket.emit("replayData", strokes);
-        } catch (err) {
-          console.error(err);
-        }
-      } else {
-        socket.emit("replayData", []);
-      }
+      const strokes = await Stroke.find();
+      socket.emit("replayData", strokes);
     }, 500);
   });
 
   socket.on("clearBoard", async () => {
-    // Clear the pending batch
+    // Clear the pending batch and redo stack
     strokeBatch = [];
+    redoStack = []; 
     if (batchTimeout) {
       clearTimeout(batchTimeout);
       batchTimeout = null;
@@ -136,6 +133,40 @@ io.on("connection", (socket) => {
       } catch (err) {
         console.error(err);
       }
+    }
+  });
+
+  socket.on("undo", async () => {
+    console.log("Undo requested by:", socket.id);
+    // 1. Try to pop from batch first (if any unsaved strokes)
+    if (strokeBatch.length > 0) {
+      const lastStroke = strokeBatch.pop();
+      redoStack.push(lastStroke);
+    } else {
+      // 2. Otherwise try to delete most recent from DB
+      const lastStroke = await Stroke.findOne().sort({ _id: -1 });
+      if (lastStroke) {
+        await Stroke.deleteOne({ _id: lastStroke._id });
+        redoStack.push(lastStroke.toObject ? lastStroke.toObject() : lastStroke);
+      }
+    }
+    // Broadcast the fresh state to everyone
+    const strokes = await Stroke.find().sort({ _id: 1 });
+    io.emit("initData", [...strokes, ...strokeBatch]);
+  });
+
+  socket.on("redo", async () => {
+    console.log("Redo requested by:", socket.id);
+    if (redoStack.length > 0) {
+      const nextStroke = redoStack.pop();
+      // Add it back
+      strokeBatch.push(nextStroke);
+      if (!batchTimeout) {
+        batchTimeout = setTimeout(saveBatch, 2000);
+      }
+      // Broadcast to everyone
+      const strokes = await Stroke.find().sort({ _id: 1 });
+      io.emit("initData", [...strokes, ...strokeBatch]);
     }
   });
 

@@ -2,11 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import rough from "roughjs";
 
-const socket = io("https://colabrative-whiteboard.onrender.com");
+const socket = io(
+  window.location.hostname === "localhost" || 
+  window.location.hostname === "127.0.0.1" || 
+  window.location.hostname.startsWith("192.168.") || 
+  window.location.hostname.startsWith("10.") 
+  ? `http://${window.location.hostname}:5000` 
+  : "https://colabrative-whiteboard.onrender.com"
+);
 
 const COLORS = ["#1e1e1e", "#e03131", "#2f9e44", "#1971c2", "#f08c00", "#a5d8ff"];
 const SIZES = [2, 4, 8];
-const BG_COLOR = "#f8f9fa";
+const BG_COLOR = "#ffffff";
 
 export default function Whiteboard() {
   const canvasRef = useRef(null);
@@ -22,15 +29,27 @@ export default function Whiteboard() {
   const [currentStrokeStyle, setCurrentStrokeStyle] = useState('solid');
   const [currentSloppiness, setCurrentSloppiness] = useState(1.8);
   const [currentOpacity, setCurrentOpacity] = useState(100);
+  const [currentTextAlign, setCurrentTextAlign] = useState('left');
+  const [currentFontWeight, setCurrentFontWeight] = useState('normal'); 
+  const [currentFontStyle, setCurrentFontStyle] = useState('normal');   
+  const [activeTextPos, setActiveTextPos] = useState(null); 
 
   // Multiplayer State
   const [liveUsers, setLiveUsers] = useState([]);
   const [cursors, setCursors] = useState({});
+  const [showGrid, setShowGrid] = useState(false);
   const [userName, setUserName] = useState(localStorage.getItem("whiteboard-user") || "");
   const [showRegModal, setShowRegModal] = useState(!localStorage.getItem("whiteboard-user"));
   const [tempName, setTempName] = useState("");
   const [showUserList, setShowUserList] = useState(false);
   const [showProperties, setShowProperties] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const fileInputRef = useRef(null);
   const imgCache = useRef({});
@@ -44,6 +63,9 @@ export default function Whiteboard() {
   const strokeStyleRef = useRef(currentStrokeStyle);
   const sloppinessRef = useRef(currentSloppiness);
   const opacityRef = useRef(currentOpacity);
+  const textAlignRef = useRef(currentTextAlign);
+  const fontWeightRef = useRef(currentFontWeight);
+  const fontStyleRef = useRef(currentFontStyle);
 
   // Update refs when state changes
   useEffect(() => { toolRef.current = currentTool; }, [currentTool]);
@@ -54,134 +76,138 @@ export default function Whiteboard() {
   useEffect(() => { strokeStyleRef.current = currentStrokeStyle; }, [currentStrokeStyle]);
   useEffect(() => { sloppinessRef.current = currentSloppiness; }, [currentSloppiness]);
   useEffect(() => { opacityRef.current = currentOpacity; }, [currentOpacity]);
+  useEffect(() => { textAlignRef.current = currentTextAlign; }, [currentTextAlign]);
+  useEffect(() => { fontWeightRef.current = currentFontWeight; }, [currentFontWeight]);
+  useEffect(() => { fontStyleRef.current = currentFontStyle; }, [currentFontStyle]);
 
-  let drawing = false;
-  let x = 0;
-  let y = 0;
+  const drawingRef = useRef(false);
+  const lastXRef = useRef(0);
+  const lastYRef = useRef(0);
+
+  // Dynamic Draw function that handles all shapes and tools
+  const drawShape = (type, x0, y0, x1, y1, color, bgColor, size, isEraseStroke, fillStyle = 'hachure', strokeStyle = 'solid', sloppiness = 1.8, opacity = 100, text = "", imageData = null, textAlign = 'left', fontWeight = 'normal', fontStyle = 'normal') => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    
+    ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
+
+    if (type === 'image' && imageData) {
+      if (imgCache.current[imageData]) {
+        const img = imgCache.current[imageData];
+        const oldAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = (opacity / 100);
+        ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+        ctx.globalAlpha = oldAlpha;
+      } else {
+        const img = new Image();
+        img.src = imageData;
+        img.onload = () => {
+           imgCache.current[imageData] = img;
+           const oldAlpha = ctx.globalAlpha;
+           ctx.globalAlpha = (opacity / 100);
+           ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+           ctx.globalAlpha = oldAlpha;
+        };
+        img.onerror = () => {
+          console.error("Failed to load image:", imageData.substring(0, 50) + "...");
+        };
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (type === 'text') {
+      const fontSize = (size * 5) + 12;
+      ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px 'Inter', sans-serif`;
+      ctx.fillStyle = color;
+      ctx.textAlign = textAlign;
+      ctx.textBaseline = 'top';
+      
+      const lines = text.split('\n');
+      lines.forEach((line, index) => {
+        ctx.fillText(line, x0, y0 + (index * fontSize * 1.2));
+      });
+      
+      ctx.globalAlpha = 1;
+      ctx.textBaseline = 'alphabetic'; // Reset
+      ctx.textAlign = 'left';           // Reset
+      return;
+    }
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = size;
+    ctx.strokeStyle = isEraseStroke ? BG_COLOR : color;
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = "transparent";
+
+    if (type === 'pen' || type === 'eraser' || !type) {
+      if (!isEraseStroke && strokeStyle === 'dashed') ctx.setLineDash([8, 8]);
+      else if (!isEraseStroke && strokeStyle === 'dotted') ctx.setLineDash([2, 4]);
+      else ctx.setLineDash([]);
+
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      const rc = rough.canvas(canvas);
+      const options = {
+        stroke: isEraseStroke ? BG_COLOR : color,
+        strokeWidth: size,
+        fill: bgColor !== 'transparent' && !isEraseStroke ? bgColor : undefined,
+        fillStyle: fillStyle,
+        fillWeight: size / 2,
+        roughness: sloppiness,
+        bowing: 1.2,
+        strokeLineDash: strokeStyle === 'dashed' ? [8, 8] : strokeStyle === 'dotted' ? [2, 4] : undefined,
+        seed: Math.abs(Math.floor(x0 + y0 + x1 + y1)) || 1
+      };
+
+      if (type === 'line') rc.line(x0, y0, x1, y1, options);
+      else if (type === 'rect') rc.rectangle(x0, y0, x1 - x0, y1 - y0, options);
+      else if (type === 'circle') {
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const d = Math.sqrt(dx * dx + dy * dy) * 2;
+        rc.circle(x0, y0, d, options);
+      } else if (type === 'diamond') {
+        const midX = x0 + (x1 - x0) / 2;
+        const midY = y0 + (y1 - y0) / 2;
+        rc.polygon([[midX, y0], [x1, midY], [midX, y1], [x0, midY]], options);
+      } else if (type === 'arrow') {
+        rc.line(x0, y0, x1, y1, options);
+        const angle = Math.atan2(y1 - y0, x1 - x0);
+        const hl = 15 + size;
+        const a1 = angle - Math.PI / 6;
+        const a2 = angle + Math.PI / 6;
+        rc.line(x1, y1, x1 - hl * Math.cos(a1), y1 - hl * Math.sin(a1), options);
+        rc.line(x1, y1, x1 - hl * Math.cos(a2), y1 - hl * Math.sin(a2), options);
+      }
+    }
+    ctx.globalAlpha = 1;
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
-    // Resize observer to keep canvas sharp
     const resizeCanvas = () => {
       const parent = canvas.parentElement;
-      // Save content before resize
       const imgData = canvas.width > 0 ? ctx.getImageData(0, 0, canvas.width, canvas.height) : null;
-
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-
-      // Fill background
       ctx.fillStyle = BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      if (imgData) {
-        ctx.putImageData(imgData, 0, 0);
-      }
+      if (imgData) ctx.putImageData(imgData, 0, 0);
     };
 
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
 
-    // Dynamic Draw function that handles all shapes and tools
-    const drawShape = (type, x0, y0, x1, y1, color, bgColor, size, isEraseStroke, fillStyle = 'hachure', strokeStyle = 'solid', sloppiness = 1.8, opacity = 100, text = "", imageData = null) => {
-      const ctx = canvas.getContext("2d");
-      ctx.globalAlpha = isEraseStroke ? 1 : (opacity / 100);
-
-      if (type === 'image' && imageData) {
-        if (imgCache.current[imageData]) {
-          const img = imgCache.current[imageData];
-          ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
-        } else {
-          const img = new Image();
-          img.src = imageData;
-          img.onload = () => {
-            imgCache.current[imageData] = img;
-            ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
-          };
-        }
-        ctx.globalAlpha = 1;
-        return;
-      }
-
-      if (type === 'text') {
-        ctx.font = `${size * 4 || 20}px 'Inter', sans-serif`;
-        ctx.fillStyle = color;
-        ctx.fillText(text, x0, y0);
-        ctx.globalAlpha = 1;
-        return;
-      }
-
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = size;
-      ctx.strokeStyle = isEraseStroke ? BG_COLOR : color;
-
-      // Remove neon shadow for the crisp Excalidraw look
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
-
-      if (type === 'pen' || type === 'eraser' || !type) {
-        if (!isEraseStroke && strokeStyle === 'dashed') ctx.setLineDash([8, 8]);
-        else if (!isEraseStroke && strokeStyle === 'dotted') ctx.setLineDash([2, 4]);
-        else ctx.setLineDash([]);
-
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.stroke();
-        ctx.setLineDash([]); // reset
-      } else {
-        const rc = rough.canvas(canvas);
-        const options = {
-          stroke: isEraseStroke ? BG_COLOR : color,
-          strokeWidth: size,
-          fill: bgColor !== 'transparent' && !isEraseStroke ? bgColor : undefined,
-          fillStyle: fillStyle,
-          fillWeight: size / 2,
-          roughness: sloppiness,
-          bowing: 1.2,
-          strokeLineDash: strokeStyle === 'dashed' ? [8, 8] : strokeStyle === 'dotted' ? [2, 4] : undefined,
-          // Generate an arbitrary pseudo-seed based on coordinates to stop the shape 
-          // from jumping around frantically when dragging or re-rendering it over sockets
-          seed: Math.abs(Math.floor(x0 + y0 + x1 + y1)) || 1
-        };
-
-        if (type === 'line') {
-          rc.line(x0, y0, x1, y1, options);
-        } else if (type === 'rect') {
-          const width = x1 - x0;
-          const height = y1 - y0;
-          rc.rectangle(x0, y0, width, height, options);
-        } else if (type === 'circle') {
-          // roughjs circle: centerX, centerY, diameter
-          // If you start dragging from x0,y0, then x0,y0 is the center!
-          const distanceX = x1 - x0;
-          const distanceY = y1 - y0;
-          const diameter = Math.sqrt(distanceX * distanceX + distanceY * distanceY) * 2;
-          rc.circle(x0, y0, diameter, options);
-        } else if (type === 'diamond') {
-          const midX = x0 + (x1 - x0) / 2;
-          const midY = y0 + (y1 - y0) / 2;
-          rc.polygon([
-            [midX, y0],
-            [x1, midY],
-            [midX, y1],
-            [x0, midY]
-          ], options);
-        } else if (type === 'arrow') {
-          rc.line(x0, y0, x1, y1, options);
-          const angle = Math.atan2(y1 - y0, x1 - x0);
-          const headLength = 15 + size;
-          const a1 = angle - Math.PI / 6;
-          const a2 = angle + Math.PI / 6;
-          rc.line(x1, y1, x1 - headLength * Math.cos(a1), y1 - headLength * Math.sin(a1), options);
-          rc.line(x1, y1, x1 - headLength * Math.cos(a2), y1 - headLength * Math.sin(a2), options);
-        }
-      }
-      ctx.globalAlpha = 1; // Always restore for future layers
-    };
 
     const getMousePos = (e) => {
       const rect = canvas.getBoundingClientRect();
@@ -189,19 +215,28 @@ export default function Whiteboard() {
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
       return {
         x: clientX - rect.left,
-        y: clientY - rect.top
+        y: clientY - rect.top,
+        clientX,
+        clientY
       };
     };
 
     const startDrawing = (e) => {
       if (e.target !== canvas) return;
-      drawing = true;
+      drawingRef.current = true;
       const pos = getMousePos(e);
-      x = pos.x;
-      y = pos.y;
+      lastXRef.current = pos.x;
+      lastYRef.current = pos.y;
       startPosRef.current = { x: pos.x, y: pos.y };
 
       const tool = toolRef.current;
+      
+      if (tool === 'text') {
+        setActiveTextPos({ x: pos.clientX, y: pos.clientY, canvasX: pos.x, canvasY: pos.y });
+        drawingRef.current = false;
+        return;
+      }
+
       // If we are drawing a shape, take a snapshot of the canvas so we can preview the outline cleanly
       if (tool !== 'pen' && tool !== 'eraser') {
         snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -209,8 +244,8 @@ export default function Whiteboard() {
     };
 
     const stopDrawing = (e) => {
-      if (!drawing) return;
-      drawing = false;
+      if (!drawingRef.current) return;
+      drawingRef.current = false;
 
       const pos = getMousePos(e);
       const tool = toolRef.current;
@@ -223,24 +258,7 @@ export default function Whiteboard() {
       const opacity = opacityRef.current;
 
       // Ensure the shape completes on screen release and hits the database
-      if (tool === 'text') {
-        const textValue = prompt("Enter text:");
-        if (textValue) {
-          const action = {
-            type: 'text',
-            x0: startPosRef.current.x / canvas.width,
-            y0: startPosRef.current.y / canvas.height,
-            x1: pos.x / canvas.width,
-            y1: pos.y / canvas.height,
-            color: color,
-            size: size,
-            text: textValue,
-            opacity
-          };
-          socket.emit("draw", action);
-          drawShape('text', startPosRef.current.x, startPosRef.current.y, pos.x, pos.y, color, bgColor, size, false, fillStyle, strokeStyle, sloppiness, opacity, textValue);
-        }
-      } else if (tool !== 'pen' && tool !== 'eraser' && tool !== 'select' && tool !== 'image') {
+      if (tool !== 'pen' && tool !== 'eraser' && tool !== 'select' && tool !== 'text' && tool !== 'image') {
         socket.emit("draw", {
           type: tool,
           x0: startPosRef.current.x / canvas.width,
@@ -256,7 +274,7 @@ export default function Whiteboard() {
     };
 
     const draw = (e) => {
-      if (!drawing) return;
+      if (!drawingRef.current) return;
       e.preventDefault();
 
       const pos = getMousePos(e);
@@ -269,18 +287,16 @@ export default function Whiteboard() {
       const sloppiness = sloppinessRef.current;
       const opacity = opacityRef.current;
 
-      if (tool === 'select' || tool === 'image') {
-        return; // Work in progress tools
-      } else if (tool === 'text') {
-        return;
+      if (tool === 'select' || tool === 'image' || tool === 'text') {
+        return; 
       } else if (tool === 'pen' || tool === 'eraser') {
-        drawShape(tool, x, y, pos.x, pos.y, color, bgColor, size, tool === 'eraser', fillStyle, strokeStyle, sloppiness, opacity);
+        drawShape(tool, lastXRef.current, lastYRef.current, pos.x, pos.y, color, bgColor, size, tool === 'eraser', fillStyle, strokeStyle, sloppiness, opacity);
 
         // Continuous emit for pens and eraser
         socket.emit("draw", {
           type: tool,
-          x0: x / canvas.width,
-          y0: y / canvas.height,
+          x0: lastXRef.current / canvas.width,
+          y0: lastYRef.current / canvas.height,
           x1: pos.x / canvas.width,
           y1: pos.y / canvas.height,
           color: color,
@@ -290,8 +306,8 @@ export default function Whiteboard() {
           fillStyle, strokeStyle, sloppiness, opacity
         });
 
-        x = pos.x;
-        y = pos.y;
+        lastXRef.current = pos.x;
+        lastYRef.current = pos.y;
       } else {
         // We are drawing a shape interactively. Restore the clean snapshot, then draw the preview over it
         if (snapshotRef.current) {
@@ -335,7 +351,10 @@ export default function Whiteboard() {
           isErase,
           s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
           s.text || "",
-          s.imageData
+          s.imageData,
+          s.textAlign || 'left',
+          s.fontWeight || 'normal',
+          s.fontStyle || 'normal'
         );
       });
     });
@@ -354,7 +373,10 @@ export default function Whiteboard() {
         isErase,
         data.fillStyle, data.strokeStyle, data.sloppiness, data.opacity,
         data.text || "",
-        data.imageData
+        data.imageData,
+        data.textAlign || 'left',
+        data.fontWeight || 'normal',
+        data.fontStyle || 'normal'
       );
     });
 
@@ -380,7 +402,10 @@ export default function Whiteboard() {
           isErase,
           s.fillStyle, s.strokeStyle, s.sloppiness, s.opacity,
           s.text || "",
-          s.imageData
+          s.imageData,
+          s.textAlign || 'left',
+          s.fontWeight || 'normal',
+          s.fontStyle || 'normal'
         );
 
         i++;
@@ -439,6 +464,23 @@ export default function Whiteboard() {
     };
   }, []);
 
+  const handleUndo = () => { socket.emit("undo"); };
+  const handleRedo = () => { socket.emit("redo"); };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const replay = () => { socket.emit("getReplay"); };
 
   const clearBoard = () => {
@@ -466,6 +508,36 @@ export default function Whiteboard() {
     socket.emit("updateUser", { name: tempName });
   };
 
+  const handleTextComplete = (textValue) => {
+    if (!textValue || !activeTextPos) {
+      setActiveTextPos(null);
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const color = colorRef.current;
+    const size = sizeRef.current;
+    const opacity = opacityRef.current;
+    const textAlign = textAlignRef.current;
+    const fontWeight = fontWeightRef.current;
+    const fontStyle = fontStyleRef.current;
+
+    const action = {
+      type: 'text',
+      x0: activeTextPos.canvasX / canvas.width,
+      y0: activeTextPos.canvasY / canvas.height,
+      x1: activeTextPos.canvasX / canvas.width,
+      y1: activeTextPos.canvasY / canvas.height,
+      color, size, text: textValue, opacity,
+      textAlign, fontWeight, fontStyle
+    };
+    
+    socket.emit("draw", action);
+    drawShape('text', activeTextPos.canvasX, activeTextPos.canvasY, activeTextPos.canvasX, activeTextPos.canvasY, color, null, size, false, null, null, null, opacity, textValue, null, textAlign, fontWeight, fontStyle);
+    
+    setActiveTextPos(null);
+  };
+
   const handleImageButtonClick = () => {
     fileInputRef.current.click();
     setCurrentTool('image');
@@ -474,6 +546,12 @@ export default function Whiteboard() {
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    if (file.size > 10 * 1024 * 1024) {
+      alert("File is too large! Please upload an image smaller than 10MB.");
+      e.target.value = "";
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -502,6 +580,14 @@ export default function Whiteboard() {
       };
     };
     reader.readAsDataURL(file);
+    e.target.value = ""; // Reset to allow picking the same file again
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("whiteboard-user");
+    setUserName("");
+    setShowRegModal(true);
+    window.location.reload();
   };
 
   return (
@@ -537,10 +623,37 @@ export default function Whiteboard() {
         </div>
       )}
 
-      <div className="whiteboard-wrapper">
+      <div className={`whiteboard-wrapper ${showGrid ? 'grid-visible' : ''}`}>
         <canvas ref={canvasRef}></canvas>
 
-        {/* Render Live Multiplayer Cursors */}
+        {activeTextPos && (
+          <textarea
+            autoFocus
+            className="canvas-text-input"
+            style={{
+              position: 'fixed',
+              left: activeTextPos.x,
+              top: activeTextPos.y,
+              color: currentColor,
+              fontSize: `${(currentSize * 5) + 12}px`,
+              fontWeight: currentFontWeight,
+              fontStyle: currentFontStyle,
+              textAlign: currentTextAlign,
+              lineHeight: 1.2
+            }}
+            onBlur={(e) => handleTextComplete(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleTextComplete(e.target.value);
+              }
+              if (e.key === 'Escape') {
+                setActiveTextPos(null);
+              }
+            }}
+          />
+        )}
+
         {Object.values(cursors).map(cursor => (
           <div
             key={cursor.id}
@@ -559,14 +672,23 @@ export default function Whiteboard() {
         ))}
       </div>
 
-      {/* Top Left Menu */}
-      <div className="top-left-menu">
-        <button className="icon-btn-square">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-        </button>
+      <div className="top-left-panel">
+        <div className="top-left-menu">
+          <button className="icon-btn-square">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div className="undo-redo-panel">
+          <button className="icon-btn-square" onClick={handleUndo} title="Undo (Ctrl+Z)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"></path></svg>
+          </button>
+          <button className="icon-btn-square" onClick={handleRedo} title="Redo (Ctrl+Y)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"></path></svg>
+          </button>
+        </div>
       </div>
 
-      {/* Top Center Tools Panel */}
       <div className="toolbar center-toolbar">
         <button className="icon-btn lock-btn" title="Keep tool selected">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -614,7 +736,6 @@ export default function Whiteboard() {
         </button>
       </div>
 
-      {/* Top Right Live Users Widget */}
       <div className="top-right-actions">
         {liveUsers.length > 0 && (
           <div className="live-status-wrapper">
@@ -678,12 +799,14 @@ export default function Whiteboard() {
           navigator.clipboard.writeText(window.location.href);
           alert("Room link copied to clipboard!");
         }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
-          Share
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+          <span>Share</span>
+        </button>
+        <button className="logout-btn" onClick={handleLogout} title="Logout">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
         </button>
       </div>
 
-      {/* Custom Data Actions (Bottom Right) */}
       <div className="bottom-right-actions flex-col">
         <button className="icon-btn-square" onClick={saveImage} title="Save to PNG">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
@@ -694,10 +817,10 @@ export default function Whiteboard() {
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
           </svg>
         </button>
-
+        <button className={`icon-btn-square ${showGrid ? 'active' : ''}`} onClick={() => setShowGrid(!showGrid)} title="Toggle Grid (G)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+        </button>
         <div className="tool-divider mobile-hide"></div>
-
-        {/* Properties Toggle for Mobile */}
         <button
           className={`action-btn mobile-only ${showProperties ? 'active' : ''}`}
           onClick={() => setShowProperties(!showProperties)}
@@ -713,29 +836,45 @@ export default function Whiteboard() {
         </button>
       </div>
 
-      {/* Bottom Left Zoom / History Actions */}
       <div className="bottom-left-actions">
         <button className="icon-btn-square">-</button>
         <span className="zoom-level">63%</span>
         <button className="icon-btn-square">+</button>
-        <div className="tool-divider"></div>
-        <button className="icon-btn-square">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"></path></svg>
-        </button>
-        <button className="icon-btn-square">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"></path></svg>
-        </button>
       </div>
 
-      { /* Left Side Properties Panel - Designed exactly to match the image */}
-      {/* Left Properties Panel */}
-      {(showProperties || window.innerWidth > 768) && (
+      {(showProperties || !isMobile) && (
         <div className={`properties-panel ${showProperties ? 'show-mobile' : ''}`}>
           <div className="prop-section">
             <span className="panel-title">Stroke color</span>
             <div className="hex-display">
-              <div className="color-swatch" style={{ backgroundColor: currentColor }}></div>
-              <span>{currentColor}</span>
+              <div 
+                className="color-swatch-wrapper"
+                onClick={() => document.getElementById('stroke-color-picker').click()}
+              >
+                <div className="color-swatch" style={{ backgroundColor: currentColor }}></div>
+                <input 
+                  id="stroke-color-picker"
+                  type="color" 
+                  value={currentColor.startsWith('#') ? currentColor : '#000000'} 
+                  onChange={(e) => setCurrentColor(e.target.value)}
+                  style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
+                />
+              </div>
+              <input 
+                type="text" 
+                className="hex-input" 
+                value={currentColor} 
+                spellCheck="false"
+                onChange={(e) => {
+                  let val = e.target.value;
+                  // Auto-prefix hex if it looks like one
+                  if (/^[0-9A-F]{3,6}$/i.test(val)) {
+                    val = '#' + val;
+                  }
+                  setCurrentColor(val);
+                }}
+                placeholder="#000000 or color name"
+              />
             </div>
             <div className="color-grid">
               {COLORS.map(c => (
@@ -749,13 +888,38 @@ export default function Whiteboard() {
             </div>
           </div>
 
-          { /* Show Fill properties only for shapes that can be filled */}
           {(currentTool === 'rect' || currentTool === 'circle' || currentTool === 'diamond') && (
             <div className="prop-section">
               <div className="panel-title">Background</div>
               <div className="hex-display">
-                <div className="color-swatch empty" style={currentBackground !== 'transparent' ? { backgroundColor: currentBackground } : {}}></div>
-                <span>{currentBackground === 'transparent' ? 'transparent' : currentBackground}</span>
+                <div 
+                  className="color-swatch-wrapper"
+                  onClick={() => currentBackground !== 'transparent' && document.getElementById('bg-color-picker').click()}
+                >
+                  <div className="color-swatch empty" style={currentBackground !== 'transparent' ? { backgroundColor: currentBackground } : {}}></div>
+                  <input 
+                    id="bg-color-picker"
+                    type="color" 
+                    value={currentBackground.startsWith('#') ? currentBackground : '#ffffff'} 
+                    onChange={(e) => setCurrentBackground(e.target.value)}
+                    style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
+                  />
+                </div>
+                <input 
+                  type="text" 
+                  className="hex-input" 
+                  value={currentBackground} 
+                  disabled={currentBackground === 'transparent'}
+                  spellCheck="false"
+                  onChange={(e) => {
+                    let val = e.target.value;
+                    if (/^[0-9A-F]{3,6}$/i.test(val)) {
+                      val = '#' + val;
+                    }
+                    setCurrentBackground(val);
+                  }}
+                  placeholder="#ffffff or color name"
+                />
               </div>
               <div className="color-grid">
                 <button
@@ -777,7 +941,37 @@ export default function Whiteboard() {
             </div>
           )}
 
-          { /* Mock controls to match the exact aesthetic */}
+          {currentTool === 'text' && (
+            <>
+              <div className="prop-section">
+                <div className="panel-title">Alignment</div>
+                <div className="button-group">
+                  <button className={`icon-btn-radio ${currentTextAlign === 'left' ? 'active' : ''}`} onClick={() => setCurrentTextAlign('left')} title="Left">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="17" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="17" y1="18" x2="3" y2="18"></line></svg>
+                  </button>
+                  <button className={`icon-btn-radio ${currentTextAlign === 'center' ? 'active' : ''}`} onClick={() => setCurrentTextAlign('center')} title="Center">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="10" x2="6" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="18" y1="18" x2="6" y2="18"></line></svg>
+                  </button>
+                  <button className={`icon-btn-radio ${currentTextAlign === 'right' ? 'active' : ''}`} onClick={() => setCurrentTextAlign('right')} title="Right">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="21" y1="10" x2="7" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="21" y1="18" x2="7" y2="18"></line></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div className="prop-section">
+                <div className="panel-title">Typography</div>
+                <div className="button-group" style={{ width: '66%' }}>
+                  <button className={`icon-btn-radio ${currentFontWeight === 'bold' ? 'active' : ''}`} onClick={() => setCurrentFontWeight(currentFontWeight === 'bold' ? 'normal' : 'bold')} title="Bold">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"></path></svg>
+                  </button>
+                  <button className={`icon-btn-radio ${currentFontStyle === 'italic' ? 'active' : ''}`} onClick={() => setCurrentFontStyle(currentFontStyle === 'italic' ? 'normal' : 'italic')} title="Italic">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="19" y1="4" x2="10" y2="4"></line><line x1="14" y1="20" x2="5" y2="20"></line><line x1="15" y1="4" x2="9" y2="20"></line></svg>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="prop-section">
             <div className="panel-title">Fill</div>
             <div className="button-group">

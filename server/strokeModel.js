@@ -15,6 +15,9 @@ const strokeSchema = new mongoose.Schema({
   sloppiness: Number,
   opacity: Number,
   text: String,
+  textAlign: { type: String, default: 'left' },
+  fontWeight: { type: String, default: 'normal' },
+  fontStyle: { type: String, default: 'normal' },
   imageData: String,
   createdAt: { type: Date, default: Date.now }
 });
