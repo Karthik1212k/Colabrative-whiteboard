@@ -97,8 +97,8 @@ export default function Whiteboard() {
           const img = new Image();
           img.src = imageData;
           img.onload = () => {
-             imgCache.current[imageData] = img;
-             ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+            imgCache.current[imageData] = img;
+            ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
           };
         }
         ctx.globalAlpha = 1;
@@ -226,19 +226,19 @@ export default function Whiteboard() {
       if (tool === 'text') {
         const textValue = prompt("Enter text:");
         if (textValue) {
-           const action = {
-              type: 'text',
-              x0: startPosRef.current.x / canvas.width,
-              y0: startPosRef.current.y / canvas.height,
-              x1: pos.x / canvas.width,
-              y1: pos.y / canvas.height,
-              color: color,
-              size: size,
-              text: textValue,
-              opacity
-           };
-           socket.emit("draw", action);
-           drawShape('text', startPosRef.current.x, startPosRef.current.y, pos.x, pos.y, color, bgColor, size, false, fillStyle, strokeStyle, sloppiness, opacity, textValue);
+          const action = {
+            type: 'text',
+            x0: startPosRef.current.x / canvas.width,
+            y0: startPosRef.current.y / canvas.height,
+            x1: pos.x / canvas.width,
+            y1: pos.y / canvas.height,
+            color: color,
+            size: size,
+            text: textValue,
+            opacity
+          };
+          socket.emit("draw", action);
+          drawShape('text', startPosRef.current.x, startPosRef.current.y, pos.x, pos.y, color, bgColor, size, false, fillStyle, strokeStyle, sloppiness, opacity, textValue);
         }
       } else if (tool !== 'pen' && tool !== 'eraser' && tool !== 'select' && tool !== 'image') {
         socket.emit("draw", {
@@ -477,29 +477,29 @@ export default function Whiteboard() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-       const base64Data = event.target.result;
-       const img = new Image();
-       img.src = base64Data;
-       img.onload = () => {
-          const canvas = canvasRef.current;
-          const x0 = (canvas.width / 2) - (img.width / 4);
-          const y0 = (canvas.height / 2) - (img.height / 4);
-          const x1 = x0 + (img.width / 2);
-          const y1 = y0 + (img.height / 2);
-          
-          imgCache.current[base64Data] = img;
-          const action = {
-             type: 'image',
-             x0: x0 / canvas.width, 
-             y0: y0 / canvas.height, 
-             x1: x1 / canvas.width, 
-             y1: y1 / canvas.height,
-             imageData: base64Data,
-             opacity: currentOpacity
-          };
-          socket.emit("draw", action);
-          drawShape('image', x0, y0, x1, y1, null, null, null, false, null, null, null, currentOpacity, "", base64Data);
-       };
+      const base64Data = event.target.result;
+      const img = new Image();
+      img.src = base64Data;
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        const x0 = (canvas.width / 2) - (img.width / 4);
+        const y0 = (canvas.height / 2) - (img.height / 4);
+        const x1 = x0 + (img.width / 2);
+        const y1 = y0 + (img.height / 2);
+
+        imgCache.current[base64Data] = img;
+        const action = {
+          type: 'image',
+          x0: x0 / canvas.width,
+          y0: y0 / canvas.height,
+          x1: x1 / canvas.width,
+          y1: y1 / canvas.height,
+          imageData: base64Data,
+          opacity: currentOpacity
+        };
+        socket.emit("draw", action);
+        drawShape('image', x0, y0, x1, y1, null, null, null, false, null, null, null, currentOpacity, "", base64Data);
+      };
     };
     reader.readAsDataURL(file);
   };
@@ -507,10 +507,10 @@ export default function Whiteboard() {
   return (
     <>
       {/* Registration Modal */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        style={{ display: 'none' }} 
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: 'none' }}
         accept="image/*"
         onChange={handleFileChange}
       />

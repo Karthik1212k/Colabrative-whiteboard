@@ -10,6 +10,13 @@ const Stroke = require("./strokeModel");
 const app = express();
 app.use(cors());
 
+const server = http.createServer(app);
+
+const io = socketIo(server, {
+  cors: { origin: "*" },
+  maxHttpBufferSize: 1e8 // increased buffer size for large base64 image uploads
+});
+
 // Health Check Route
 app.get("/", (req, res) => {
   res.send({
@@ -19,15 +26,10 @@ app.get("/", (req, res) => {
   });
 });
 
-const server = http.createServer(app);
-
-const io = socketIo(server, {
-  cors: { origin: "*" }
-});
-
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("Connected to MongoDB Atlas"))
-  .catch(err => console.error("Database connection error:", err));
+const mongoURI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/whiteboard";
+mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 })
+  .then(() => console.log("Connected to MongoDB (" + mongoURI + ")"))
+  .catch(err => console.error("Database connection error. Strokes will not be saved/restored until DB is connected. Error:", err.message));
 
 let strokeBatch = [];
 let batchTimeout = null;
@@ -36,7 +38,9 @@ function saveBatch() {
   if (strokeBatch.length > 0) {
     const batchToSave = [...strokeBatch];
     strokeBatch = [];
-    Stroke.insertMany(batchToSave).catch(err => console.error("Error saving batch:", err));
+    if (mongoose.connection.readyState === 1) {
+      Stroke.insertMany(batchToSave).catch(err => console.error("Error saving batch:", err));
+    }
   }
   batchTimeout = null;
 }
@@ -68,9 +72,13 @@ io.on("connection", (socket) => {
   });
 
   // Send historical drawing data to the newly connected user immediately
-  Stroke.find().then(strokes => {
-    socket.emit("initData", strokes);
-  });
+  if (mongoose.connection.readyState === 1) {
+    Stroke.find().then(strokes => {
+      socket.emit("initData", strokes);
+    }).catch(err => console.error(err));
+  } else {
+    socket.emit("initData", []);
+  }
 
   socket.on("draw", (data) => {
     // Broadcast to everyone EXCEPT the sender
@@ -97,8 +105,16 @@ io.on("connection", (socket) => {
 
     // Small delay to ensure DB insertion is complete
     setTimeout(async () => {
-      const strokes = await Stroke.find();
-      socket.emit("replayData", strokes);
+      if (mongoose.connection.readyState === 1) {
+        try {
+          const strokes = await Stroke.find();
+          socket.emit("replayData", strokes);
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        socket.emit("replayData", []);
+      }
     }, 500);
   });
 
@@ -114,7 +130,13 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("clearBoard");
 
     // Wipe DB
-    await Stroke.deleteMany({});
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await Stroke.deleteMany({});
+      } catch (err) {
+        console.error(err);
+      }
+    }
   });
 
   // Track live mouse cursors
