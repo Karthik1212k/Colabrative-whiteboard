@@ -221,8 +221,23 @@ export default function Whiteboard() {
       };
     };
 
+    let lastTouchTime = 0;
+
     const startDrawing = (e) => {
       if (e.target !== canvas) return;
+      
+      if (e.type === 'touchstart') {
+        lastTouchTime = Date.now();
+      } else if (e.type === 'mousedown') {
+        if (Date.now() - lastTouchTime < 500) return;
+      }
+
+      const textInput = document.querySelector('.canvas-text-input');
+      if (textInput) {
+        textInput.blur();
+        return; // First tap outside just commits the active text
+      }
+
       drawingRef.current = true;
       const pos = getMousePos(e);
       lastXRef.current = pos.x;
@@ -233,6 +248,10 @@ export default function Whiteboard() {
       
       if (tool === 'text') {
         setActiveTextPos({ x: pos.clientX, y: pos.clientY, canvasX: pos.x, canvasY: pos.y });
+        setTimeout(() => {
+          const input = document.querySelector('.canvas-text-input');
+          if (input) input.focus();
+        }, 50);
         drawingRef.current = false;
         return;
       }
