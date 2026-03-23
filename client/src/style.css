@@ -1,8 +1,8 @@
 :root {
   /* Modern Vibrant Color Palette */
   --bg: #ffffff;
-  --surface: rgba(255, 255, 255, 0.8);
-  --border: rgba(226, 232, 240, 0.8);
+  --surface: #ffffff;
+  --border: #e2e8f0;
   --accent: #6366f1;
   --accent-light: #e0e7ff;
   --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
@@ -13,8 +13,8 @@
   --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
   --radius: 16px;
   --radius-sm: 8px;
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-bg: #ffffff;
+  --glass-border: #e2e8f0;
 }
 
 
@@ -121,6 +121,14 @@ canvas {
 
 .center-toolbar:hover {
   transform: translateX(-50%) translateY(2px);
+}
+
+.tool-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
 }
 
 /* --- Top Right Panel --- */
@@ -598,6 +606,11 @@ canvas {
   min-width: 50px;
 }
 
+/* --- Utilities --- */
+.mobile-only {
+  display: none !important;
+}
+
 /* --- Responsive Adjustments --- */
 @media (max-width: 1024px) {
   .properties-panel {
@@ -621,17 +634,49 @@ canvas {
 }
 
 @media (max-width: 768px) {
+  .mobile-only {
+    display: flex !important;
+  }
+  
+  .mobile-hide {
+    display: none !important;
+  }
+
   .center-toolbar {
     bottom: 1.25rem;
     top: auto;
     width: 95%;
+    max-width: calc(100vw - 1rem);
     background: var(--glass-bg);
     padding: 0.5rem;
+    overflow-x: auto;
+    justify-content: flex-start;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .center-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .action-btn, .icon-btn-square, .lock-btn, .icon-btn {
+    flex-shrink: 0;
   }
 
   .top-left-panel, .top-right-actions {
     top: 0.75rem;
     gap: 0.5rem;
+  }
+
+  .bottom-right-actions {
+    bottom: 5rem;
+    right: 0.75rem;
+  }
+
+  .bottom-left-actions {
+    bottom: 5rem;
+    left: 0.75rem;
+    display: none;
   }
 
   .share-btn span {
@@ -644,6 +689,7 @@ canvas {
 
   .properties-panel {
     display: none; /* Controlled by React state */
+    bottom: 5rem;
   }
 
   .properties-panel.show-mobile {
@@ -654,7 +700,7 @@ canvas {
 
 @media (max-width: 480px) {
   .center-toolbar {
-    gap: 0.15rem;
+    gap: 0.25rem;
   }
   
   .action-btn {
